@@ -1,9 +1,16 @@
 """
 hangul-bypass — IME 없이 어디서든 한글 입력
 
+Windows IME를 사용하지 않고, 영문 키보드 입력을 가로채어
+실시간으로 한글로 변환·주입하는 도구.
+게임(헬다이버즈2 등) 채팅처럼 IME가 불안정한 환경에서 유용.
+
+주입 방식: keyboard.write(delay=0.01) — SendInput + KEYEVENTF_UNICODE
+키 차단: keyboard.hook(suppress=True) — 저수준 키보드 훅
+
 사용법:
-    1. 관리자 권한으로 실행
-    2. 오른쪽 Alt로 한/영 전환
+    1. python hangul_bypass.py 실행
+    2. R-Alt / Enter로 한/영 전환
     3. 한글 모드에서 타이핑 → 실시간 한글 주입
     4. Ctrl+C: 종료
 """
@@ -18,7 +25,8 @@ from hangul_utils import convert_key
 # ── 설정 ──────────────────────────────────────────────────────
 TOGGLE_KEY = ["right alt"]
 
-# ── 한글 조합 ─────────────────────────────────────────────────
+# ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
+# 영문 키 → 한글 자모 매핑. 대문자는 쌍자음/쌍모음.
 CONS = {
     'r':'ㄱ','R':'ㄲ','s':'ㄴ','e':'ㄷ','E':'ㄸ','f':'ㄹ','a':'ㅁ',
     'q':'ㅂ','Q':'ㅃ','t':'ㅅ','T':'ㅆ','d':'ㅇ','w':'ㅈ','W':'ㅉ',
@@ -29,24 +37,33 @@ VOWS = {
     'P':'ㅖ','h':'ㅗ','hk':'ㅘ','ho':'ㅙ','hl':'ㅚ','y':'ㅛ','n':'ㅜ',
     'nj':'ㅝ','np':'ㅞ','nl':'ㅟ','b':'ㅠ','m':'ㅡ','ml':'ㅢ','l':'ㅣ'
 }
-SHIFT_KEYS = {'R','E','Q','T','W','O','P'}
+SHIFT_KEYS = {'R','E','Q','T','W','O','P'}  # Shift로 입력하는 쌍자음/쌍모음
 KOREAN_KEYS = set(CONS.keys()) | {k for k in VOWS.keys() if len(k) == 1}
 
 log = logging.getLogger(__name__)
 
 
 def engkor(text):
-    """영문 키 배열 → 한글 조합"""
+    """영문 키 시퀀스 → 한글 조합 결과 분리.
+
+    Returns:
+        (fixed_str, cursor, split_index)
+        - fixed_str: 확정된 글자 (조합 완료)
+        - cursor: 아직 조합 중인 글자
+        - split_index: korean_keys를 자를 위치
+    """
     result_2 = convert_key(''.join(text), 'ko')
     result_1 = ''
     split_index = 0
     len_text = len(text)
     last_t = text[len_text - 1]
-    before_last_t = text[len_text - 2]
+    before_last_t = text[len_text - 2] if len_text >= 2 else ''
     if len(result_2) == 2:
+        # 2글자 → 앞 글자는 확정, 뒤 글자는 조합 중
         result_1 = result_2[0]
         result_2 = result_2[1]
         split_index = len_text - 1
+        # 마지막이 모음이고 그 앞이 자음이면, 자음을 조합 중으로 유지
         if last_t in VOWS and before_last_t in CONS:
             split_index -= 1
     return result_1, result_2, split_index
@@ -54,18 +71,27 @@ def engkor(text):
 
 # ── 상태 관리 ─────────────────────────────────────────────────
 class State:
+    """한글 조합 상태를 추적.
+
+    - mode: True=한글, False=영문
+    - fixed: 확정된 텍스트 (화면에 이미 주입됨)
+    - korean_keys: 현재 조합 중인 영문 키 시퀀스
+    """
+
     def __init__(self):
-        self.mode = False         # True: 한글, False: 영문
+        self.mode = False
         self.fixed = ''
         self.korean_keys = []
 
     def toggle(self):
+        """한/영 전환. 조합 중이던 텍스트는 확정 후 상태 초기화."""
         self._cursor()
         self.fixed = ''
         self.korean_keys.clear()
         self.mode = not self.mode
 
     def record(self, key):
+        """키 입력을 상태에 반영."""
         if key == 'backspace':
             self._backspace()
         elif key == 'space':
@@ -76,14 +102,17 @@ class State:
             self._insert(key)
 
     def current(self):
-        cursor = self._cursor()    # fixed를 먼저 수정
-        return self.fixed + cursor  # 수정된 fixed를 읽음
+        """현재 화면에 표시되어야 할 전체 텍스트 반환."""
+        cursor = self._cursor()
+        return self.fixed + cursor
 
     def clear(self):
+        """상태 초기화 (화면 텍스트는 유지)."""
         self.fixed = ''
         self.korean_keys.clear()
 
     def _cursor(self):
+        """조합 중인 키를 한글로 변환. 확정된 부분은 fixed로 이동."""
         if not self.korean_keys:
             return ''
         fixed_str, cursor, split_index = engkor(self.korean_keys)
@@ -92,33 +121,36 @@ class State:
         return cursor
 
     def _backspace(self):
+        """조합 중이면 마지막 키 제거, 아니면 확정 텍스트 마지막 글자 제거."""
         if self.korean_keys:
             self.korean_keys.pop()
         else:
             self.fixed = self.fixed[:-1]
 
     def _insert(self, word):
-        if self.mode:
-            check = word if word in SHIFT_KEYS else word.lower()
-            if check in KOREAN_KEYS:
-                if word not in SHIFT_KEYS:
-                    word = word.lower()
-                self.korean_keys.append(word)
-            else:
-                cursor = self._cursor()
-                self.fixed += cursor + word
-                self.korean_keys.clear()
+        """키를 한글 조합에 추가. 한글 키가 아니면 확정 후 그대로 삽입."""
+        check = word if word in SHIFT_KEYS else word.lower()
+        if self.mode and check in KOREAN_KEYS:
+            if word not in SHIFT_KEYS:
+                word = word.lower()
+            self.korean_keys.append(word)
         else:
+            # 비한글 문자: 조합 확정 후 문자 그대로 추가
             cursor = self._cursor()
             self.fixed += cursor + word
             self.korean_keys.clear()
 
 
 # ── 주입 (keyboard.write + 딜레이) ───────────────────────────
-WRITE_DELAY = 0.01  # 글자 간 딜레이 (초)
+WRITE_DELAY = 0.01   # 글자 간 딜레이 (초) — 게임 입력 안정성용
+BS_SETTLE = 0.02     # 백스페이스 후 대기 (초) — 게임이 처리할 시간
 
 
 def inject_diff(prev, curr):
+    """이전 텍스트와 현재 텍스트의 차이만큼 백스페이스 + 재입력.
+
+    공통 접두사를 유지하고, 달라진 부분만 교체하여 최소한의 키 이벤트 발생.
+    """
     bs_count = len(prev) - len(_common_prefix(prev, curr))
     new_chars = curr[len(prev) - bs_count:]
     log.debug("inject_diff: %r → %r (bs=%d, new=%r)",
@@ -127,13 +159,14 @@ def inject_diff(prev, curr):
     for _ in range(bs_count):
         keyboard.press_and_release('backspace')
     if bs_count > 0 and new_chars:
-        time.sleep(0.02)  # 백스페이스 처리 대기
+        time.sleep(BS_SETTLE)
     if new_chars:
         keyboard.write(new_chars, delay=WRITE_DELAY)
         log.debug("write: %r", new_chars)
 
 
 def _common_prefix(a, b):
+    """두 문자열의 공통 접두사 반환."""
     i = 0
     for x, y in zip(a, b):
         if x != y:
@@ -145,11 +178,12 @@ def _common_prefix(a, b):
 # ── 메인 루프 ─────────────────────────────────────────────────
 def main():
     state = State()
-    prev_text = ''
+    prev_text = ''        # 화면에 주입된 텍스트 (inject_diff 기준점)
     ctrl_held = False
     shift_held = False
     alt_held = False
 
+    # ── 배너 ──
     print("=" * 45)
     print("  hangul-bypass")
     print("=" * 45)
@@ -160,15 +194,17 @@ def main():
     print("  * 한글 모드에서 CapsLock 무시됨")
     print("=" * 45)
 
+    # ── 모드 전환 로그 (최근 5개) ──
     MAX_LOG = 5
     mode_log = deque(maxlen=MAX_LOG)
     mode_log.append("[영문 모드]")
     printed_lines = 0
 
     def print_mode_log():
+        """ANSI 이스케이프로 이전 로그를 덮어쓰며 최근 N개만 표시."""
         nonlocal printed_lines
         if printed_lines > 0:
-            print(f"\033[{printed_lines}A", end="")  # 이전 출력만큼 위로
+            print(f"\033[{printed_lines}A", end="")
         for msg in mode_log:
             print(f"\033[K{msg}")
         printed_lines = len(mode_log)
@@ -180,48 +216,51 @@ def main():
     print("[영문 모드]")
     printed_lines = 1
 
+    # ── 키보드 훅 ──
     def on_key(event):
-        nonlocal prev_text, ctrl_held, shift_held
-
+        """키 이벤트 래퍼. 에러 발생 시 키를 통과시켜 먹통 방지."""
         try:
             return _on_key(event)
         except Exception as e:
             log.error("on_key 에러: %s", e)
-            return True  # 에러 시 키 통과 (먹통 방지)
+            return True
 
     def _on_key(event):
+        """키 이벤트 핵심 처리.
+
+        반환값:
+            True  → 키를 OS/앱에 전달 (통과)
+            False → 키를 차단 (suppress)
+        """
         nonlocal prev_text, ctrl_held, shift_held, alt_held
 
         key = event.name
         is_down = event.event_type == 'down'
 
-        # 디버그: 모든 키 이름 출력 (--debug 모드)
         log.debug("event: name=%r type=%s", key, event.event_type)
 
-        # Ctrl 추적
+        # ── 수식키 추적 (항상 통과) ──
+
         if key in ('ctrl', 'left ctrl', 'right ctrl'):
             ctrl_held = is_down
             return True
 
-        # Alt 추적
         if key in ('alt', 'left alt', 'right alt'):
             alt_held = is_down
-            # R-Alt 토글은 아래에서 별도 처리
-            if key != 'right alt':
+            if key != 'right alt':  # R-Alt는 토글용, 아래에서 별도 처리
                 return True
 
-        # Shift 추적
         if key in ('shift', 'left shift', 'right shift'):
             shift_held = is_down
-            if state.mode:
-                return False  # 한글 모드에서 suppress
             return True
 
-        # key-up 무시
+        # key-up은 처리하지 않음
         if not is_down:
             return True
 
-        # Alt: 한/영 전환 (Ctrl/Alt 조합 체크보다 먼저)
+        # ── 모드 전환 키 ──
+
+        # R-Alt: 한/영 토글 (Ctrl/Alt 조합 체크보다 먼저 처리)
         if key in TOGGLE_KEY:
             state.toggle()
             prev_text = ''
@@ -230,11 +269,11 @@ def main():
             log_mode(f"[{mode_str} 모드] (R-Alt)")
             return True
 
-        # Ctrl/Alt 조합 통과
+        # Ctrl/Alt 조합은 무조건 통과 (Ctrl+C, Alt+Tab 등)
         if ctrl_held or alt_held:
             return True
 
-        # Enter: 한/영 토글 후 통과
+        # Enter: 한/영 토글 (게임 채팅 열기/송출)
         if key == 'enter':
             state.toggle()
             prev_text = ''
@@ -242,7 +281,7 @@ def main():
             log_mode(f"[{mode_str} 모드] (Enter)")
             return True
 
-        # Esc: 영문 모드로 전환 후 통과
+        # Esc: 영문 모드 강제 전환 (게임 채팅 닫기)
         if key in ('escape', 'esc'):
             if state.mode:
                 state.clear()
@@ -251,46 +290,47 @@ def main():
                 log_mode("[영문 모드] (Esc)")
             return True
 
-        # 영문 모드: 통과
+        # ── 영문 모드: 모든 키 통과 ──
         if not state.mode:
             return True
 
-        # ── 한글 모드: 키 suppress ──
+        # ── 한글 모드: 키 가로채기 ──
         log.debug("key: %r  mode=한글", key)
 
-        # Backspace
+        # Backspace: 조합 중이면 마지막 키 제거, 아니면 통과
         if key == 'backspace':
             if not state.korean_keys and not state.fixed:
-                return True  # 조합 중 아니면 통과
+                return True
             state.record(key)
             curr_text = state.current()
             inject_diff(prev_text, curr_text)
             prev_text = curr_text
-            return False  # suppress
+            return False
 
         # Space: 조합 확정 + 실제 스페이스 키 전송
+        # keyboard.write(' ')는 게임에서 무시되므로 press_and_release 사용
         if key == 'space':
             state.clear()
             prev_text = ''
             keyboard.press_and_release('space')
-            return False  # suppress
+            return False
 
-
-        # 문자 키만 suppress
+        # 문자 키: 한글 조합 처리
         if len(key) == 1:
-            key = key.lower()   # CapsLock 무시
+            key = key.lower()       # CapsLock 무시: 항상 소문자 기준
             if shift_held:
-                key = key.upper()
+                key = key.upper()   # Shift만 대문자 기준 (쌍자음 등)
             state.record(key)
             curr_text = state.current()
             inject_diff(prev_text, curr_text)
             prev_text = curr_text
             if not state.korean_keys:
+                # 조합 완료 (비한글 문자 등): 상태 리셋
                 state.fixed = ''
                 prev_text = ''
-            return False  # suppress
+            return False
 
-        # 그 외 키(Tab, F키, 방향키 등): 조합 확정 후 통과
+        # 그 외 키 (Tab, F키, 방향키 등): 조합 확정 후 통과
         state.clear()
         prev_text = ''
         return True
