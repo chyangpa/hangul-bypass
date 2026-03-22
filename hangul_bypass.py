@@ -29,7 +29,8 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-TOGGLE_KEY = ["right alt"]
+VERSION = "0.2.0"
+TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
 # 영문 키 → 한글 자모 매핑. 대문자는 쌍자음/쌍모음.
@@ -218,40 +219,67 @@ def main():
 
     term_w = os.get_terminal_size().columns
     TW = term_w - 2          # 박스 안쪽 폭 (양쪽 │ 제외)
-    L = TW // 2              # 왼쪽 패널 폭
+    L = (TW * 2) // 5        # 왼쪽 패널 40% (Claude Code 비율)
     R = TW - L - 1           # 오른쪽 패널 폭 (중앙 │ 제외)
 
     def row(left="", right=""):
-        if right:
-            return f"│{pad(left, L)}{C_DIM}│{C_RESET}{pad(right, R)}│"
+        return f"│{pad(left, L)}{C_DIM}│{C_RESET}{pad(right, R)}│"
+
+    # 모드 표시줄 (오른쪽에 Enter 키바인딩 표시)
+    MODE_RIGHT = f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 영문 모드 (채팅 열기/송출)"
+
+    def mode_row(is_korean):
+        if is_korean:
+            left = f"   {C_GREEN}● 현재 상태: 한글 모드{C_RESET}"
         else:
-            return f"│{pad(left, TW)}│"
+            left = f"   {C_WHITE}○ 현재 상태: 영문 모드{C_RESET}"
+        return row(left, MODE_RIGHT)
 
-    # 로고 자리 (TODO: ASCII 아트 로고로 교체)
-    LOGO_LINES = ["", "", "", ""]
+    # 타이틀을 상단 테두리에 삽입
+    title = f" HD2 Hangul Bypass v{VERSION} "
+    top_border = f"╭───{C_CYAN}{C_BOLD}{title}{C_RESET}{'─' * (TW - len(title) - 3)}╮"
 
-    print(f"╭{'─' * TW}╮")
+    print(top_border)
     print(row())
-    print(row(f"   {C_CYAN}{C_BOLD}hangul-bypass{C_RESET}",
+    print(row(f"   {C_WHITE}{C_BOLD}슈퍼 지구에 오신 것을 환영합니다{C_RESET}",
               f" {C_WHITE}키 바인딩{C_RESET}"))
-    print(row("", f" {C_DIM}{'─' * (R - 1)}{C_RESET}"))
-    print(row(LOGO_LINES[0],
-              f" {C_YELLOW}R-Alt{C_RESET}  {C_DIM}·{C_RESET} 한/영 전환"))
-    print(row(LOGO_LINES[1],
-              f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 영문 모드 (채팅 송출)"))
-    print(row(LOGO_LINES[2],
-              f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 영문 모드 (채팅 닫기)"))
-    print(row(LOGO_LINES[3],
+    print(row(f"   {C_DIM}[ 자유. 평등. 한글. ]{C_RESET}",
+              f" {C_DIM}{'─' * (R - 1)}{C_RESET}"))
+    print(row("",
+              f" {C_YELLOW}R-Alt{C_RESET} / {C_YELLOW}한/영{C_RESET} {C_DIM}·{C_RESET} 한/영 전환"))
+    print(mode_row(False))  # ← 모드 표시줄 (나중에 덮어씀)
+    print(row("",
+              f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 영문 모드 (채팅 닫기 등)"))
+    print(row("",
               f" {C_YELLOW}Ctrl+C{C_RESET} {C_DIM}·{C_RESET} 종료"))
-    print(row())
     print(row(f"   {C_DIM}IME 없이 어디서든 한글 입력{C_RESET}",
               f" {C_DIM}* CapsLock은 한글 모드에서 무시됨{C_RESET}"))
     print(f"╰{'─' * TW}╯")
 
-    # ── 모드 전환 로그 (debug 전용) ──
+    # 모드줄 위치 계산:
+    # top(1) empty(2) 슈퍼지구(3) 자유(4) mode(5)
+    # Enter(6) Esc(7) Ctrl+C(8) IME(9) ╰(10) cursor(11)
+    # top(1) empty(2) 슈퍼지구(3) 자유(4) R-Alt(5) mode(6)
+    # Esc(7) Ctrl+C(8) IME(9) ╰(10) cursor(11)
+    # MODE_LINE_UP = 11 - 6 = 5
+    MODE_LINE_UP = 5
+
+    # ── 모드 전환 표시 ──
+    import ctypes
+
+    def set_title(mode_str):
+        """콘솔 타이틀에 현재 모드 표시 (작업표시줄에서 확인 가능)."""
+        indicator = "🟢 한글 모드" if mode_str == "한글" else "⚪ 영문 모드"
+        ctypes.windll.kernel32.SetConsoleTitleW(f"hangul-bypass — {indicator}")
+
     def log_mode(is_korean, source):
-        """모드 전환을 debug 로그로 출력."""
+        """모드 전환 시 박스 내 모드줄 + 타이틀 업데이트."""
         mode = "한글" if is_korean else "영문"
+        set_title(mode)
+        # 커서를 모드줄로 이동 → 덮어쓰기 → 원위치
+        print(f"\033[{MODE_LINE_UP}A\r{mode_row(is_korean)}\033[{MODE_LINE_UP}B\r",
+              end="", flush=True)
+        log.debug("모드 전환 → %s (%s)", mode, source)
         log.debug("모드 전환 → %s (%s)", mode, source)
 
     log_mode(False, "시작")
