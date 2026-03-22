@@ -17,10 +17,16 @@ Windows IME를 사용하지 않고, 영문 키보드 입력을 가로채어
 
 import argparse
 import logging
+import sys
+import io
 import time
-from collections import deque
 import keyboard
 from hangul_utils import convert_key
+
+# Windows 콘솔 cp949 → UTF-8 강제 (유니코드 박스 문자 출력용)
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
 TOGGLE_KEY = ["right alt"]
@@ -183,38 +189,72 @@ def main():
     shift_held = False
     alt_held = False
 
-    # ── 배너 ──
-    print("=" * 45)
-    print("  hangul-bypass")
-    print("=" * 45)
-    print("  R-Alt : 한/영 전환")
-    print("  Enter : 한/영 전환 (채팅 열기/송출)")
-    print("  Esc   : 영문 모드 (채팅 닫기)")
-    print("  Ctrl+C: 종료")
-    print("  * 한글 모드에서 CapsLock 무시됨")
-    print("=" * 45)
+    # ── ANSI 색상 ──
+    C_RESET = "\033[0m"
+    C_BOLD  = "\033[1m"
+    C_DIM   = "\033[2m"
+    C_CYAN  = "\033[36m"
+    C_GREEN = "\033[32m"
+    C_YELLOW = "\033[33m"
+    C_WHITE = "\033[37m"
 
-    # ── 모드 전환 로그 (최근 5개) ──
-    MAX_LOG = 5
-    mode_log = deque(maxlen=MAX_LOG)
-    mode_log.append("[영문 모드]")
-    printed_lines = 0
+    # ── 배너 (터미널 폭 반응형) ──
+    import os
+    import re
+    import unicodedata
 
-    def print_mode_log():
-        """ANSI 이스케이프로 이전 로그를 덮어쓰며 최근 N개만 표시."""
-        nonlocal printed_lines
-        if printed_lines > 0:
-            print(f"\033[{printed_lines}A", end="")
-        for msg in mode_log:
-            print(f"\033[K{msg}")
-        printed_lines = len(mode_log)
+    def vlen(s):
+        """ANSI 이스케이프 제외한 터미널 표시 폭 계산."""
+        clean = re.sub(r'\033\[[0-9;]*m', '', s)
+        w = 0
+        for c in clean:
+            cat = unicodedata.east_asian_width(c)
+            w += 2 if cat in ('F', 'W') else 1
+        return w
 
-    def log_mode(msg):
-        mode_log.append(msg)
-        print_mode_log()
+    def pad(s, width):
+        """문자열 s를 터미널 폭 width에 맞게 공백 패딩."""
+        return s + ' ' * max(0, width - vlen(s))
 
-    print("[영문 모드]")
-    printed_lines = 1
+    term_w = os.get_terminal_size().columns
+    TW = term_w - 2          # 박스 안쪽 폭 (양쪽 │ 제외)
+    L = TW // 2              # 왼쪽 패널 폭
+    R = TW - L - 1           # 오른쪽 패널 폭 (중앙 │ 제외)
+
+    def row(left="", right=""):
+        if right:
+            return f"│{pad(left, L)}{C_DIM}│{C_RESET}{pad(right, R)}│"
+        else:
+            return f"│{pad(left, TW)}│"
+
+    # 로고 자리 (TODO: ASCII 아트 로고로 교체)
+    LOGO_LINES = ["", "", "", ""]
+
+    print(f"╭{'─' * TW}╮")
+    print(row())
+    print(row(f"   {C_CYAN}{C_BOLD}hangul-bypass{C_RESET}",
+              f" {C_WHITE}키 바인딩{C_RESET}"))
+    print(row("", f" {C_DIM}{'─' * (R - 1)}{C_RESET}"))
+    print(row(LOGO_LINES[0],
+              f" {C_YELLOW}R-Alt{C_RESET}  {C_DIM}·{C_RESET} 한/영 전환"))
+    print(row(LOGO_LINES[1],
+              f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 한/영 전환 (채팅 열기/송출)"))
+    print(row(LOGO_LINES[2],
+              f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 영문 모드 (채팅 닫기)"))
+    print(row(LOGO_LINES[3],
+              f" {C_YELLOW}Ctrl+C{C_RESET} {C_DIM}·{C_RESET} 종료"))
+    print(row())
+    print(row(f"   {C_DIM}IME 없이 어디서든 한글 입력{C_RESET}",
+              f" {C_DIM}* CapsLock은 한글 모드에서 무시됨{C_RESET}"))
+    print(f"╰{'─' * TW}╯")
+
+    # ── 모드 전환 로그 (debug 전용) ──
+    def log_mode(is_korean, source):
+        """모드 전환을 debug 로그로 출력."""
+        mode = "한글" if is_korean else "영문"
+        log.debug("모드 전환 → %s (%s)", mode, source)
+
+    log_mode(False, "시작")
 
     # ── 키보드 훅 ──
     def on_key(event):
@@ -264,9 +304,7 @@ def main():
         if key in TOGGLE_KEY:
             state.toggle()
             prev_text = ''
-            mode_str = "한글" if state.mode else "영문"
-            log.debug("toggle → %s", mode_str)
-            log_mode(f"[{mode_str} 모드] (R-Alt)")
+            log_mode(state.mode, "R-Alt")
             return True
 
         # Ctrl/Alt 조합은 무조건 통과 (Ctrl+C, Alt+Tab 등)
@@ -277,8 +315,7 @@ def main():
         if key == 'enter':
             state.toggle()
             prev_text = ''
-            mode_str = "한글" if state.mode else "영문"
-            log_mode(f"[{mode_str} 모드] (Enter)")
+            log_mode(state.mode, "Enter")
             return True
 
         # Esc: 영문 모드 강제 전환 (게임 채팅 닫기)
@@ -287,7 +324,7 @@ def main():
                 state.clear()
                 prev_text = ''
                 state.mode = False
-                log_mode("[영문 모드] (Esc)")
+                log_mode(False, "Esc")
             return True
 
         # ── 영문 모드: 모든 키 통과 ──
