@@ -1,31 +1,20 @@
 """
-hangul-bypass — IME 없이 게임 채팅에 한글 입력
-- IME를 막아둔 게임/프로그램에서 한글 채팅 가능
-- 오버레이 없이 게임 채팅창에 바로 표시됨
-- WM_CHAR로 유니코드 직접 주입
-
-설치:
-    pip install keyboard hangul-utils
+hangul-bypass — IME 없이 어디서든 한글 입력
 
 사용법:
     1. 관리자 권한으로 실행
-    2. 게임에서 Enter로 채팅창 열기
-    3. 한글 타이핑 → 게임 채팅창에 실시간 표시
-    4. \\ 로 전송, ESC로 취소
-    5. Alt로 한/영 전환
+    2. 오른쪽 Alt로 한/영 전환
+    3. 한글 모드에서 타이핑 → 실시간 한글 주입
+    4. Ctrl+C: 종료
 """
 
-import ctypes
-import ctypes.wintypes
-import time
+import argparse
+import logging
 import keyboard
 from hangul_utils import convert_key
 
 # ── 설정 ──────────────────────────────────────────────────────
-GAME_TITLE = "HELLDIVERS™ 2"
-SEND_KEY   = "\\"
-EXIT_KEY   = "esc"
-TOGGLE_KEY = ["alt", "right alt"]
+TOGGLE_KEY = ["right alt"]
 
 # ── 한글 조합 ─────────────────────────────────────────────────
 CONS = {
@@ -39,6 +28,9 @@ VOWS = {
     'nj':'ㅝ','np':'ㅞ','nl':'ㅟ','b':'ㅠ','m':'ㅡ','ml':'ㅢ','l':'ㅣ'
 }
 SHIFT_KEYS = {'R','E','Q','T','W','O','P'}
+KOREAN_KEYS = set(CONS.keys()) | {k for k in VOWS.keys() if len(k) == 1}
+
+log = logging.getLogger(__name__)
 
 
 def engkor(text):
@@ -61,28 +53,29 @@ def engkor(text):
 # ── 상태 관리 ─────────────────────────────────────────────────
 class State:
     def __init__(self):
-        self.mode = True          # True: 한글, False: 영문
+        self.mode = False         # True: 한글, False: 영문
         self.fixed = ''
         self.korean_keys = []
 
+    def toggle(self):
+        self._cursor()
+        self.fixed = ''
+        self.korean_keys.clear()
+        self.mode = not self.mode
+
     def record(self, key):
-        if key in TOGGLE_KEY:
-            self.mode = not self.mode
-            return
         if key == 'backspace':
             self._backspace()
         elif key == 'space':
-            self._insert(' ')
+            cursor = self._cursor()
+            self.fixed += cursor + ' '
+            self.korean_keys.clear()
         elif len(key) == 1:
             self._insert(key)
 
     def current(self):
-        return self.fixed + self._cursor()
-
-    def flush(self):
-        result = self.fixed + self._cursor()
-        self.clear()
-        return result
+        cursor = self._cursor()    # fixed를 먼저 수정
+        return self.fixed + cursor  # 수정된 fixed를 읽음
 
     def clear(self):
         self.fixed = ''
@@ -104,49 +97,33 @@ class State:
 
     def _insert(self, word):
         if self.mode:
-            if word not in SHIFT_KEYS:
-                word = word.lower()
-            self.korean_keys.append(word)
+            check = word if word in SHIFT_KEYS else word.lower()
+            if check in KOREAN_KEYS:
+                if word not in SHIFT_KEYS:
+                    word = word.lower()
+                self.korean_keys.append(word)
+            else:
+                cursor = self._cursor()
+                self.fixed += cursor + word
+                self.korean_keys.clear()
         else:
             cursor = self._cursor()
             self.fixed += cursor + word
             self.korean_keys.clear()
 
 
-# ── WM_CHAR 주입 ──────────────────────────────────────────────
-user32 = ctypes.windll.user32
-WM_CHAR    = 0x0102
-WM_KEYDOWN = 0x0100
-WM_KEYUP   = 0x0101
-VK_BACK    = 0x08
-VK_RETURN  = 0x0D
+# ── 주입 ─────────────────────────────────────────────────────
+def send_char(char):
+    log.debug("send_char: %r (U+%04X)", char, ord(char))
+    keyboard.write(char, delay=0)
 
 
-def find_window():
-    hwnd = user32.FindWindowW(None, GAME_TITLE)
-    return hwnd if hwnd else None
+def send_backspace():
+    log.debug("send_backspace")
+    keyboard.press_and_release('backspace')
 
 
-def send_char(hwnd, char):
-    user32.PostMessageW(hwnd, WM_CHAR, ord(char), 1)
-    time.sleep(0.003)
-
-
-def send_backspace(hwnd):
-    user32.PostMessageW(hwnd, WM_KEYDOWN, VK_BACK, 1)
-    time.sleep(0.003)
-    user32.PostMessageW(hwnd, WM_KEYUP, VK_BACK, 1)
-    time.sleep(0.003)
-
-
-def send_enter(hwnd):
-    user32.PostMessageW(hwnd, WM_KEYDOWN, VK_RETURN, 1)
-    time.sleep(0.005)
-    user32.PostMessageW(hwnd, WM_KEYUP, VK_RETURN, 1)
-
-
-def inject_diff(hwnd, prev, curr):
-    """이전/현재 문자열 차이만큼 백스페이스 + 새 글자 주입"""
+def inject_diff(prev, curr):
     common = 0
     for a, b in zip(prev, curr):
         if a == b:
@@ -154,99 +131,107 @@ def inject_diff(hwnd, prev, curr):
         else:
             break
 
-    for _ in range(len(prev) - common):
-        send_backspace(hwnd)
+    bs_count = len(prev) - common
+    new_chars = curr[common:]
+    log.debug("inject_diff: %r → %r (common=%d, bs=%d, new=%r)",
+              prev, curr, common, bs_count, new_chars)
 
-    for ch in curr[common:]:
-        send_char(hwnd, ch)
+    for _ in range(bs_count):
+        send_backspace()
+    for ch in new_chars:
+        send_char(ch)
 
 
 # ── 메인 루프 ─────────────────────────────────────────────────
 def main():
     state = State()
-    typing = False
     prev_text = ''
+    ctrl_held = False
 
     print("=" * 45)
-    print(f"  hangul-bypass → {GAME_TITLE}")
+    print("  hangul-bypass")
     print("=" * 45)
-    print(f"  enter : 채팅창 열기")
-    print(f"  {SEND_KEY}     : 전송")
-    print(f"  {EXIT_KEY}    : 취소")
-    print(f"  alt   : 한/영 전환")
+    print(f"  R-Alt : 한/영 전환")
     print(f"  Ctrl+C: 종료")
     print("=" * 45)
+    print("[영문 모드]")
 
     def on_key(event):
-        nonlocal typing, prev_text
+        nonlocal prev_text, ctrl_held
 
         key = event.name
-        hwnd = find_window()
+        is_down = event.event_type == 'down'
 
-        if not hwnd:
+        # Ctrl 추적
+        if key in ('ctrl', 'left ctrl', 'right ctrl'):
+            ctrl_held = is_down
             return
 
-        # ── 채팅 중이 아닐 때 ──
-        if not typing:
-            if key == 'enter':
-                send_enter(hwnd)
-                typing = True
-                state.clear()
-                prev_text = ''
-                print("[채팅 모드 ON]")
-                return keyboard.block_key(key)
+        # key-up 무시
+        if not is_down:
             return
 
-        # ── 채팅 중 ──
-        if key == SEND_KEY:
-            text = state.flush()
-            inject_diff(hwnd, prev_text, text)
-            time.sleep(0.02)
-            send_enter(hwnd)
-            typing = False
-            prev_text = ''
-            print(f"\n[전송] {text}")
-            return keyboard.block_key(key)
-
-        if key == EXIT_KEY:
-            inject_diff(hwnd, prev_text, '')
-            state.clear()
-            typing = False
-            prev_text = ''
-            print("\n[취소]")
+        # Ctrl 조합 통과
+        if ctrl_held:
             return
 
+        # Alt: 한/영 전환
         if key in TOGGLE_KEY:
-            state.record(key)
-            return keyboard.block_key(key)
+            state.toggle()
+            prev_text = ''
+            mode_str = "한글" if state.mode else "영문"
+            log.debug("toggle → %s", mode_str)
+            print(f"\r[{mode_str} 모드]")
+            return
 
+        # 영문 모드: 통과
+        if not state.mode:
+            return
+
+        # ── 한글 모드 ──
+        log.debug("key: %r  mode=한글", key)
+
+        # Backspace
         if key == 'backspace':
+            leaked_prev = prev_text[:-1] if prev_text else ''
             state.record(key)
             curr_text = state.current()
-            inject_diff(hwnd, prev_text, curr_text)
+            inject_diff(leaked_prev, curr_text)
             prev_text = curr_text
-            print(f"\r[버퍼] {curr_text}    ", end='', flush=True)
-            return keyboard.block_key(key)
+            return
 
+        # Space
         if key == 'space':
             state.record('space')
             curr_text = state.current()
-            inject_diff(hwnd, prev_text, curr_text)
-            prev_text = curr_text
-            print(f"\r[버퍼] {curr_text}    ", end='', flush=True)
-            return keyboard.block_key(key)
+            inject_diff(prev_text + ' ', curr_text)
+            state.fixed = ''
+            prev_text = ''
+            return
 
+        # 문자 키
         if len(key) == 1:
             state.record(key)
             curr_text = state.current()
-            inject_diff(hwnd, prev_text, curr_text)
+            inject_diff(prev_text + key, curr_text)
             prev_text = curr_text
-            print(f"\r[버퍼] {curr_text}    ", end='', flush=True)
-            return keyboard.block_key(key)
+            if not state.korean_keys:
+                state.fixed = ''
+                prev_text = ''
+            return
 
-    keyboard.on_press(on_key, suppress=True)
+    keyboard.hook(on_key)
     keyboard.wait()
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="hangul-bypass")
+    parser.add_argument("--debug", action="store_true", help="디버그 로그 출력")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
     main()
