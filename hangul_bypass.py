@@ -238,7 +238,7 @@ def main():
     print(row(LOGO_LINES[0],
               f" {C_YELLOW}R-Alt{C_RESET}  {C_DIM}·{C_RESET} 한/영 전환"))
     print(row(LOGO_LINES[1],
-              f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 한/영 전환 (채팅 열기/송출)"))
+              f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 영문 모드 (채팅 송출)"))
     print(row(LOGO_LINES[2],
               f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 영문 모드 (채팅 닫기)"))
     print(row(LOGO_LINES[3],
@@ -311,11 +311,13 @@ def main():
         if ctrl_held or alt_held:
             return True
 
-        # Enter: 한/영 토글 (게임 채팅 열기/송출)
+        # Enter: 영문 모드 강제 전환 (채팅 송출 후 바로 게임 조작 가능)
         if key == 'enter':
-            state.toggle()
-            prev_text = ''
-            log_mode(state.mode, "Enter")
+            if state.mode:
+                state.clear()
+                prev_text = ''
+                state.mode = False
+                log_mode(False, "Enter")
             return True
 
         # Esc: 영문 모드 강제 전환 (게임 채팅 닫기)
