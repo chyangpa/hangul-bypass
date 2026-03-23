@@ -29,7 +29,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
@@ -258,7 +258,7 @@ def main():
                  f" {C_YELLOW}Ctrl+C{C_RESET} {C_DIM}·{C_RESET} 종료"),
         (None,   "",
                  ""),
-        (None,   f"   {C_DIM}IME 없이 어디서든 한글 입력{C_RESET}",
+        (None,   f"   {C_CYAN}게임(HELLDIVERS™ 2) 창이 활성화된 상태에서만 동작합니다{C_RESET}",
                  f" {C_DIM}* CapsLock은 한글 모드에서 무시됨{C_RESET}"),
     ]
 
@@ -317,6 +317,22 @@ def main():
         log.debug("채팅 모드 → %s", "한글" if is_korean else "영문")
 
 
+    # ── 포커스 체크 (윈도우 타이틀 방식) ──
+    import ctypes.wintypes
+
+    ALLOWED_TITLES = {"HELLDIVERS™ 2"}
+
+    def get_foreground_title():
+        """포커스된 윈도우의 타이틀 반환."""
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        buf = ctypes.create_unicode_buffer(256)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buf, 256)
+        return buf.value
+
+    def is_allowed_focus():
+        """허용된 윈도우가 포커스인지 확인."""
+        return get_foreground_title() in ALLOWED_TITLES
+
     log_mode(False, "시작")
 
     # ── 키보드 훅 ──
@@ -340,9 +356,9 @@ def main():
         key = event.name
         is_down = event.event_type == 'down'
 
-        log.debug("event: name=%r type=%s", key, event.event_type)
+        log.debug("event: name=%r type=%s  fg=%r", key, event.event_type, get_foreground_title())
 
-        # ── 수식키 추적 (항상 통과) ──
+        # ── 수식키 추적 (포커스 무관하게 항상 추적) ──
 
         if key in ('ctrl', 'left ctrl', 'right ctrl'):
             ctrl_held = is_down
@@ -355,6 +371,10 @@ def main():
 
         if key in ('shift', 'left shift', 'right shift'):
             shift_held = is_down
+            return True
+
+        # 포커스 체크: 허용된 윈도우가 아니면 나머지 키 통과
+        if not is_allowed_focus():
             return True
 
         # key-up은 처리하지 않음
