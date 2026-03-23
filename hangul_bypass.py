@@ -29,7 +29,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
@@ -186,6 +186,8 @@ def _common_prefix(a, b):
 def main():
     state = State()
     prev_text = ''        # 화면에 주입된 텍스트 (inject_diff 기준점)
+    chat_open = False     # 채팅창 열림 여부
+    chat_mode = False    # 채팅창 모드 (True=한글, False=영문)
     ctrl_held = False
     shift_held = False
     alt_held = False
@@ -195,6 +197,7 @@ def main():
     C_BOLD  = "\033[1m"
     C_DIM   = "\033[2m"
     C_CYAN  = "\033[36m"
+    C_RED   = "\033[31m"
     C_GREEN = "\033[32m"
     C_YELLOW = "\033[33m"
     C_WHITE = "\033[37m"
@@ -219,50 +222,83 @@ def main():
 
     term_w = os.get_terminal_size().columns
     TW = term_w - 2          # 박스 안쪽 폭 (양쪽 │ 제외)
-    L = (TW * 2) // 5        # 왼쪽 패널 40% (Claude Code 비율)
+    L = TW // 2               # 왼쪽 패널 50%
     R = TW - L - 1           # 오른쪽 패널 폭 (중앙 │ 제외)
 
     def row(left="", right=""):
         return f"│{pad(left, L)}{C_DIM}│{C_RESET}{pad(right, R)}│"
 
-    # 모드 표시줄 (오른쪽에 Enter 키바인딩 표시)
-    MODE_RIGHT = f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 영문 모드 (채팅 열기/송출)"
-
-    def mode_row(is_korean):
+    # ── 배너 행 정의 ──
+    # 각 행은 (id, left, right) 튜플. id가 있으면 런타임에 덮어쓸 수 있음.
+    def mode_left(is_korean):
         if is_korean:
-            left = f"   {C_GREEN}● 현재 상태: 한글 모드{C_RESET}"
-        else:
-            left = f"   {C_WHITE}○ 현재 상태: 영문 모드{C_RESET}"
-        return row(left, MODE_RIGHT)
+            return f"   {C_GREEN}● 현재 상태: 한글 모드{C_RESET}"
+        return f"   {C_WHITE}○ 현재 상태: 영문 모드{C_RESET}"
 
-    # 타이틀을 상단 테두리에 삽입
+    def chat_left(is_open):
+        if is_open:
+            return f"   {C_YELLOW}▶ 채팅창: 열림{C_RESET}"
+        return f"   {C_DIM}■ 채팅창: 닫힘{C_RESET}"
+
+    def chat_mode_left(is_korean):
+        if is_korean:
+            return f"   {C_DIM}↩ 채팅 모드: 한글{C_RESET}"
+        return f"   {C_DIM}↩ 채팅 모드: 영문{C_RESET}"
+
+    def warn_left(show):
+        if show:
+            return f"   {C_RED}! 인게임 조작 불가 — 한/영 또는 Esc를 누르세요{C_RESET}"
+        return ""
+
+    banner_rows = [
+        (None,   "",
+                 ""),
+        (None,   f"   {C_WHITE}{C_BOLD}슈퍼 지구에 오신 것을 환영합니다{C_RESET}",
+                 f" {C_WHITE}키 바인딩{C_RESET}"),
+        (None,   f"   {C_DIM}[ 자유. 평등. 한글. ]{C_RESET}",
+                 f" {C_DIM}{'─' * (R - 1)}{C_RESET}"),
+        (None,   "",
+                 f" {C_YELLOW}R-Alt{C_RESET} / {C_YELLOW}한/영{C_RESET} {C_DIM}·{C_RESET} 한/영 전환 (채팅 중 모드 기억)"),
+        ("mode", mode_left(False),
+                 f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 채팅 토글 (열기: 기억 모드 / 닫기: 영문)"),
+        ("chat", chat_left(False),
+                 f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 채팅 닫기 + 영문 전환"),
+        ("saved", chat_mode_left(False),
+                 f" {C_YELLOW}Ctrl+C{C_RESET} {C_DIM}·{C_RESET} 종료"),
+        ("warn", warn_left(False),
+                 ""),
+        (None,   f"   {C_DIM}IME 없이 어디서든 한글 입력{C_RESET}",
+                 f" {C_DIM}* CapsLock은 한글 모드에서 무시됨{C_RESET}"),
+    ]
+
+    # id → 커서 기준 위로 몇 줄 (배너 출력 후 자동 계산)
+    row_offset = {}
+    total = len(banner_rows) + 2  # +2: top_border + bottom_border
+    for i, (rid, _, _) in enumerate(banner_rows):
+        if rid:
+            # 커서는 bottom_border 다음 줄 → 위로 (total - 1 - i) 줄
+            row_offset[rid] = total - 1 - i
+
+    def update_row(rid, left, right=None):
+        """배너 내 특정 행을 런타임에 덮어쓴다."""
+        up = row_offset[rid]
+        # right가 None이면 해당 행의 원래 right 사용
+        if right is None:
+            for r_id, _, r_right in banner_rows:
+                if r_id == rid:
+                    right = r_right
+                    break
+        line = row(left, right)
+        print(f"\033[{up}A\r{line}\033[{up}B\r", end="", flush=True)
+
+    # ── 배너 출력 ──
     title = f" HD2 Hangul Bypass v{VERSION} "
     top_border = f"╭───{C_CYAN}{C_BOLD}{title}{C_RESET}{'─' * (TW - len(title) - 3)}╮"
 
     print(top_border)
-    print(row())
-    print(row(f"   {C_WHITE}{C_BOLD}슈퍼 지구에 오신 것을 환영합니다{C_RESET}",
-              f" {C_WHITE}키 바인딩{C_RESET}"))
-    print(row(f"   {C_DIM}[ 자유. 평등. 한글. ]{C_RESET}",
-              f" {C_DIM}{'─' * (R - 1)}{C_RESET}"))
-    print(row("",
-              f" {C_YELLOW}R-Alt{C_RESET} / {C_YELLOW}한/영{C_RESET} {C_DIM}·{C_RESET} 한/영 전환"))
-    print(mode_row(False))  # ← 모드 표시줄 (나중에 덮어씀)
-    print(row("",
-              f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 영문 모드 (채팅 닫기 등)"))
-    print(row("",
-              f" {C_YELLOW}Ctrl+C{C_RESET} {C_DIM}·{C_RESET} 종료"))
-    print(row(f"   {C_DIM}IME 없이 어디서든 한글 입력{C_RESET}",
-              f" {C_DIM}* CapsLock은 한글 모드에서 무시됨{C_RESET}"))
+    for _, left_text, right_text in banner_rows:
+        print(row(left_text, right_text))
     print(f"╰{'─' * TW}╯")
-
-    # 모드줄 위치 계산:
-    # top(1) empty(2) 슈퍼지구(3) 자유(4) mode(5)
-    # Enter(6) Esc(7) Ctrl+C(8) IME(9) ╰(10) cursor(11)
-    # top(1) empty(2) 슈퍼지구(3) 자유(4) R-Alt(5) mode(6)
-    # Esc(7) Ctrl+C(8) IME(9) ╰(10) cursor(11)
-    # MODE_LINE_UP = 11 - 6 = 5
-    MODE_LINE_UP = 5
 
     # ── 모드 전환 표시 ──
     import ctypes
@@ -273,14 +309,25 @@ def main():
         ctypes.windll.kernel32.SetConsoleTitleW(f"hangul-bypass — {indicator}")
 
     def log_mode(is_korean, source):
-        """모드 전환 시 박스 내 모드줄 + 타이틀 업데이트."""
+        """모드 전환 시 배너 모드줄 + 타이틀 업데이트."""
         mode = "한글" if is_korean else "영문"
         set_title(mode)
-        # 커서를 모드줄로 이동 → 덮어쓰기 → 원위치
-        print(f"\033[{MODE_LINE_UP}A\r{mode_row(is_korean)}\033[{MODE_LINE_UP}B\r",
-              end="", flush=True)
+        update_row("mode", mode_left(is_korean))
         log.debug("모드 전환 → %s (%s)", mode, source)
-        log.debug("모드 전환 → %s (%s)", mode, source)
+
+    def log_chat(is_open):
+        """채팅 상태 변경 시 배너 채팅줄 업데이트."""
+        update_row("chat", chat_left(is_open))
+        log.debug("채팅창 → %s", "열림" if is_open else "닫힘")
+
+    def log_chat_mode(is_korean):
+        """채팅 모드 변경 시 배너 업데이트."""
+        update_row("saved", chat_mode_left(is_korean))
+        log.debug("채팅 모드 → %s", "한글" if is_korean else "영문")
+
+    def update_warn():
+        """한글 모드 + 채팅창 닫힘 → 경고 표시."""
+        update_row("warn", warn_left(state.mode and not chat_open))
 
     log_mode(False, "시작")
 
@@ -300,7 +347,7 @@ def main():
             True  → 키를 OS/앱에 전달 (통과)
             False → 키를 차단 (suppress)
         """
-        nonlocal prev_text, ctrl_held, shift_held, alt_held
+        nonlocal prev_text, chat_open, chat_mode, ctrl_held, shift_held, alt_held
 
         key = event.name
         is_down = event.event_type == 'down'
@@ -333,28 +380,48 @@ def main():
             state.toggle()
             prev_text = ''
             log_mode(state.mode, "R-Alt")
+            if chat_open:
+                chat_mode = state.mode
+                log_chat_mode(chat_mode)
+            update_warn()
             return True
 
         # Ctrl/Alt 조합은 무조건 통과 (Ctrl+C, Alt+Tab 등)
         if ctrl_held or alt_held:
             return True
 
-        # Enter: 영문 모드 강제 전환 (채팅 송출 후 바로 게임 조작 가능)
+        # Enter: 채팅 열기/송출 토글
         if key == 'enter':
-            if state.mode:
-                state.clear()
-                prev_text = ''
-                state.mode = False
-                log_mode(False, "Enter")
+            if chat_open:
+                # 송출: 영문 전환 + 채팅 닫기
+                chat_open = False
+                log_chat(False)
+                if state.mode:
+                    state.clear()
+                    prev_text = ''
+                    state.mode = False
+                    log_mode(False, "Enter(송출)")
+            else:
+                # 열기: chat_mode 복원
+                chat_open = True
+                log_chat(True)
+                if chat_mode:
+                    state.mode = True
+                    log_mode(True, "Enter(열기)")
+            update_warn()
             return True
 
-        # Esc: 영문 모드 강제 전환 (게임 채팅 닫기)
+        # Esc: 채팅 닫기 + 영문 전환
         if key in ('escape', 'esc'):
+            if chat_open:
+                chat_open = False
+                log_chat(False)
             if state.mode:
                 state.clear()
                 prev_text = ''
                 state.mode = False
                 log_mode(False, "Esc")
+            update_warn()
             return True
 
         # ── 영문 모드: 모든 키 통과 ──
