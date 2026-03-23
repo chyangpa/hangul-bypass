@@ -29,7 +29,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
@@ -183,11 +183,11 @@ def _common_prefix(a, b):
 
 
 # ── 메인 루프 ─────────────────────────────────────────────────
-def main():
+def main(debug=False):
     state = State()
     prev_text = ''        # 화면에 주입된 텍스트 (inject_diff 기준점)
     chat_open = False     # 채팅창 열림 여부
-    chat_mode = False    # 채팅창 모드 (True=한글, False=영문)
+    chat_mode = True     # 채팅창 모드 (True=한글, False=영문) — 기본 한글
     ctrl_held = False
     shift_held = False
     alt_held = False
@@ -235,20 +235,11 @@ def main():
             return f"   {C_GREEN}● 현재 상태: 한글 모드{C_RESET}"
         return f"   {C_WHITE}○ 현재 상태: 영문 모드{C_RESET}"
 
-    def chat_left(is_open):
+    def chat_left(is_open, chat_mode=False):
+        mode_str = "한글" if chat_mode else "영문"
         if is_open:
-            return f"   {C_YELLOW}▶ 채팅창: 열림{C_RESET}"
-        return f"   {C_DIM}■ 채팅창: 닫힘{C_RESET}"
-
-    def chat_mode_left(is_korean):
-        if is_korean:
-            return f"   {C_DIM}↩ 채팅 모드: 한글{C_RESET}"
-        return f"   {C_DIM}↩ 채팅 모드: 영문{C_RESET}"
-
-    def warn_left(show):
-        if show:
-            return f"   {C_RED}! 인게임 조작 불가 — 한/영 또는 Esc를 누르세요{C_RESET}"
-        return ""
+            return f"   {C_YELLOW}▶ 채팅창: 열림 ({mode_str} 모드){C_RESET}"
+        return f"   {C_DIM}■ 채팅창: 닫힘 ({mode_str} 모드){C_RESET}"
 
     banner_rows = [
         (None,   "",
@@ -258,16 +249,16 @@ def main():
         (None,   f"   {C_DIM}[ 자유. 평등. 한글. ]{C_RESET}",
                  f" {C_DIM}{'─' * (R - 1)}{C_RESET}"),
         (None,   "",
-                 f" {C_YELLOW}R-Alt{C_RESET} / {C_YELLOW}한/영{C_RESET} {C_DIM}·{C_RESET} 한/영 전환 (채팅 중 모드 기억)"),
+                 f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 채팅창 열기 / 보내기"),
         ("mode", mode_left(False),
-                 f" {C_YELLOW}Enter{C_RESET}  {C_DIM}·{C_RESET} 채팅 토글 (열기: 기억 모드 / 닫기: 영문)"),
-        ("chat", chat_left(False),
-                 f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 채팅 닫기 + 영문 전환"),
-        ("saved", chat_mode_left(False),
+                 f" {C_YELLOW}R-Alt(한/영){C_RESET} {C_DIM}·{C_RESET} 한/영 전환"),
+        ("chat", chat_left(False, True),
+                 f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 채팅창 닫기"),
+        (None,   "",
                  f" {C_YELLOW}Ctrl+C{C_RESET} {C_DIM}·{C_RESET} 종료"),
-        ("warn", warn_left(False),
+        (None,   "",
                  ""),
-        (None,   f"   {C_DIM}IME 없이 어디서든 한글 입력{C_RESET}",
+        (None,   f"   {C_CYAN}게임(HELLDIVERS™ 2) 창이 활성화된 상태에서만 동작합니다{C_RESET}",
                  f" {C_DIM}* CapsLock은 한글 모드에서 무시됨{C_RESET}"),
     ]
 
@@ -300,8 +291,33 @@ def main():
         print(row(left_text, right_text))
     print(f"╰{'─' * TW}╯")
 
-    # ── 모드 전환 표시 ──
+    # ── 활성 창 체크 ──
     import ctypes
+    import ctypes.wintypes
+
+    ALLOWED_PROCESSES = {"helldivers2.exe"}
+
+    def get_foreground_process():
+        """활성 창의 프로세스명 반환 (소문자)."""
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        pid = ctypes.wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not handle:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            size = ctypes.wintypes.DWORD(260)
+            ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size))
+            return os.path.basename(buf.value).lower()
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+
+    # 시작 시점의 활성 창 윈도우 = 자기 자신의 터미널
+    _self_hwnd = ctypes.windll.user32.GetForegroundWindow()
+
+    # ── 모드 전환 표시 ──
 
     def set_title(mode_str):
         """콘솔 타이틀에 현재 모드 표시 (작업표시줄에서 확인 가능)."""
@@ -317,17 +333,14 @@ def main():
 
     def log_chat(is_open):
         """채팅 상태 변경 시 배너 채팅줄 업데이트."""
-        update_row("chat", chat_left(is_open))
+        update_row("chat", chat_left(is_open, chat_mode))
         log.debug("채팅창 → %s", "열림" if is_open else "닫힘")
 
     def log_chat_mode(is_korean):
-        """채팅 모드 변경 시 배너 업데이트."""
-        update_row("saved", chat_mode_left(is_korean))
+        """채팅 모드 변경 시 배너 업데이트 (채팅창 행에 합침)."""
+        update_row("chat", chat_left(chat_open, is_korean))
         log.debug("채팅 모드 → %s", "한글" if is_korean else "영문")
 
-    def update_warn():
-        """한글 모드 + 채팅창 닫힘 → 경고 표시."""
-        update_row("warn", warn_left(state.mode and not chat_open))
 
     log_mode(False, "시작")
 
@@ -354,6 +367,16 @@ def main():
 
         log.debug("event: name=%r type=%s", key, event.event_type)
 
+        # 활성 창 체크: 허용된 프로세스가 아니면 모든 키 통과
+        fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+        is_self = fg_hwnd == _self_hwnd
+        if is_self and not debug:
+            return True
+        if not is_self:
+            proc = get_foreground_process()
+            if proc not in ALLOWED_PROCESSES:
+                return True
+
         # ── 수식키 추적 (항상 통과) ──
 
         if key in ('ctrl', 'left ctrl', 'right ctrl'):
@@ -377,13 +400,15 @@ def main():
 
         # R-Alt: 한/영 토글 (Ctrl/Alt 조합 체크보다 먼저 처리)
         if key in TOGGLE_KEY:
+            if not chat_open and not state.mode:
+                # 채팅창 닫힌 상태에서 영문→한글 전환 차단
+                return True
             state.toggle()
             prev_text = ''
             log_mode(state.mode, "R-Alt")
             if chat_open:
                 chat_mode = state.mode
                 log_chat_mode(chat_mode)
-            update_warn()
             return True
 
         # Ctrl/Alt 조합은 무조건 통과 (Ctrl+C, Alt+Tab 등)
@@ -408,7 +433,7 @@ def main():
                 if chat_mode:
                     state.mode = True
                     log_mode(True, "Enter(열기)")
-            update_warn()
+
             return True
 
         # Esc: 채팅 닫기 + 영문 전환
@@ -421,7 +446,7 @@ def main():
                 prev_text = ''
                 state.mode = False
                 log_mode(False, "Esc")
-            update_warn()
+
             return True
 
         # ── 영문 모드: 모든 키 통과 ──
@@ -483,4 +508,4 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%H:%M:%S",
     )
-    main()
+    main(debug=args.debug)
