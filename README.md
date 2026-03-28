@@ -1,8 +1,8 @@
 # HD2 Hangul Bypass
 
-**HELLDIVERS 2 전용 — IME 없이 게임 채팅에 한글을 직접 주입하는 Windows 도구**
+**HELLDIVERS™ 2 전용 — IME 없이 게임 채팅에 한글을 직접 주입하는 Windows 도구**
 
-HELLDIVERS 2의 채팅창에서 Windows IME가 동작하지 않아 한글 입력이 불가능한 문제를 우회합니다.
+HELLDIVERS™ 2의 채팅창에서 Windows IME가 동작하지 않아 한글 입력이 불가능한 문제를 우회합니다.
 영문 키보드 입력을 가로채 실시간으로 한글로 변환하여 주입합니다.
 
 ![HD2 Hangul Bypass](screenshot.png)
@@ -102,7 +102,7 @@ pyinstaller hangul-bypass.spec
 
 - **Windows 전용** — Win32 API와 `keyboard` 라이브러리 의존
 - **관리자 권한 필요** — 저수준 키보드 훅 사용
-- **HELLDIVERS 2 기준 설계** — 다른 게임은 `ALLOWED_TITLES` 수정 필요
+- **HELLDIVERS™ 2 기준 설계** — 다른 게임은 `ALLOWED_TITLES` 수정 필요
 - 클립보드 붙여넣기(Ctrl+V) 미지원 (향후 추가 예정)
 
 ---
