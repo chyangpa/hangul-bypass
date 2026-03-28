@@ -1,8 +1,8 @@
 # HD2 Hangul Bypass
 
-**IME 없이 게임 채팅에 한글을 직접 주입하는 Windows 전용 도구**
+**HELLDIVERS 2 전용 — IME 없이 게임 채팅에 한글을 직접 주입하는 Windows 도구**
 
-HELLDIVERS 2 등 Windows IME가 불안정하게 동작하는 게임에서,
+HELLDIVERS 2의 채팅창에서 Windows IME가 불안정하게 동작하는 문제를 우회합니다.
 영문 키보드 입력을 가로채 실시간으로 한글로 변환하여 주입합니다.
 
 ```
