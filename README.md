@@ -103,7 +103,7 @@ pyinstaller hangul-bypass.spec
 - **Windows 전용** — Win32 API와 `keyboard` 라이브러리 의존
 - **관리자 권한 필요** — 저수준 키보드 훅 사용
 - **HELLDIVERS™ 2 기준 설계** — 다른 게임은 `ALLOWED_TITLES` 수정 필요
-- 클립보드 붙여넣기(Ctrl+V) 미지원 (향후 추가 예정)
+
 
 ---
 
