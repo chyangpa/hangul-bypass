@@ -37,7 +37,14 @@ HELLDIVERS 2의 채팅창에서 Windows IME가 동작하지 않아 한글 입력
 
 ### EXE (권장)
 
-[Releases](../../releases)에서 `hangul-bypass.exe`를 다운로드하여 **관리자 권한**으로 실행합니다.
+[Releases](../../releases)에서 `hangul-bypass.exe`를 다운로드하여 실행합니다.
+게임 실행 전/후 상관없이 창을 띄워두면 됩니다.
+
+- 동작하지 않으면 **관리자 권한**으로 실행
+- 상태가 꼬이면 `Esc`를 눌러 초기화
+
+> exe 파일 특성상 다운로드 시 브라우저 경고, 실행 시 Windows SmartScreen 경고가 뜰 수 있습니다.
+> "추가 정보" → "실행"을 누르면 됩니다.
 
 ### Python 소스
 
@@ -45,8 +52,6 @@ HELLDIVERS 2의 채팅창에서 Windows IME가 동작하지 않아 한글 입력
 pip install -r requirements.txt
 python hangul_bypass.py
 ```
-
-> 키보드 훅은 관리자 권한이 필요합니다.
 
 ### 디버그 모드
 
@@ -67,7 +72,7 @@ python hangul_bypass.py --debug
 | `Space` | 현재 조합 확정 + 공백 입력 |
 | `Ctrl+C` | 프로그램 종료 |
 
-- **CapsLock**은 한글 모드에서 무시됩니다 (항상 소문자 기준).
+- **CapsLock**이 켜져 있어도 쌍자음으로 입력되지 않습니다 (Shift만 쌍자음 인식).
 - **Ctrl/Alt 조합**(Ctrl+C, Alt+Tab 등)은 한글 모드에서도 그대로 통과합니다.
 
 ---
