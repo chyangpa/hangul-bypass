@@ -1,2 +1,3 @@
 keyboard
+mouse
 py-hangul-utils

@@ -1,26 +1,31 @@
 """
-hangul-bypass — IME 없이 어디서든 한글 입력
+hangul-bypass — HELLDIVERS™ 2 전용 한글 입력기
 
-Windows IME를 사용하지 않고, 영문 키보드 입력을 가로채어
-실시간으로 한글로 변환·주입하는 도구.
-게임(헬다이버즈2 등) 채팅처럼 IME가 불안정한 환경에서 유용.
+게임 채팅창에서 Windows IME가 동작하지 않는 문제를 우회.
+영문 키보드 입력을 가로채 실시간으로 한글로 변환·주입한다.
 
-주입 방식: keyboard.write(delay=0.01) — SendInput + KEYEVENTF_UNICODE
-키 차단: keyboard.hook(suppress=True) — 저수준 키보드 훅
+구조:
+    훅 스레드  — 키 억제 결정 + 모드 전환 (블로킹 없음)
+    처리 스레드 — 큐에서 키를 꺼내 한글 조합 + inject_diff 순차 실행
 
-사용법:
-    1. python hangul_bypass.py 실행
-    2. R-Alt / Enter로 한/영 전환
-    3. 한글 모드에서 타이핑 → 실시간 한글 주입
-    4. Ctrl+C: 종료
+주입 방식: keyboard.write() — SendInput + KEYEVENTF_UNICODE
+키 차단:   keyboard.hook(suppress=True) — 저수준 키보드 훅
 """
 
 import argparse
+import ctypes
+import ctypes.wintypes
 import logging
+import os
+import queue
+import re
 import sys
 import io
+import threading
 import time
+import unicodedata
 import keyboard
+import mouse
 from hangul_utils import convert_key
 
 # Windows 콘솔 cp949 → UTF-8 강제 (유니코드 박스 문자 출력용)
@@ -29,7 +34,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
@@ -185,7 +190,6 @@ def _common_prefix(a, b):
 # ── 메인 루프 ─────────────────────────────────────────────────
 def main():
     state = State()
-    prev_text = ''        # 화면에 주입된 텍스트 (inject_diff 기준점)
     chat_open = False     # 채팅창 열림 여부
     chat_mode = True     # 채팅창 모드 (True=한글, False=영문) — 기본 한글
     ctrl_held = False
@@ -197,16 +201,11 @@ def main():
     C_BOLD  = "\033[1m"
     C_DIM   = "\033[2m"
     C_CYAN  = "\033[36m"
-    C_RED   = "\033[31m"
     C_GREEN = "\033[32m"
     C_YELLOW = "\033[33m"
     C_WHITE = "\033[37m"
 
     # ── 배너 (터미널 폭 반응형) ──
-    import os
-    import re
-    import unicodedata
-
     def vlen(s):
         """ANSI 이스케이프 제외한 터미널 표시 폭 계산."""
         clean = re.sub(r'\033\[[0-9;]*m', '', s)
@@ -253,13 +252,13 @@ def main():
         ("mode", mode_left(False),
                  f" {C_YELLOW}R-Alt(한/영){C_RESET} {C_DIM}·{C_RESET} 한/영 전환"),
         ("chat", chat_left(False, True),
-                 f" {C_YELLOW}Esc{C_RESET}    {C_DIM}·{C_RESET} 채팅창 닫기"),
+                 f" {C_YELLOW}Esc, L/R-클릭{C_RESET} {C_DIM}·{C_RESET} 채팅창 닫기"),
         (None,   "",
-                 f" {C_YELLOW}Ctrl+C{C_RESET} {C_DIM}·{C_RESET} 종료"),
+                 ""),
         (None,   "",
                  ""),
         (None,   f"   {C_CYAN}게임(HELLDIVERS™ 2) 창이 활성화된 상태에서만 동작합니다{C_RESET}",
-                 ""),
+                 f" {C_DIM}* 상태가 꼬이면 Esc/클릭으로 초기화{C_RESET}"),
     ]
 
     # id → 커서 기준 위로 몇 줄 (배너 출력 후 자동 계산)
@@ -292,7 +291,6 @@ def main():
     print(f"╰{'─' * TW}╯")
 
     # ── 모드 전환 표시 ──
-    import ctypes
 
     def set_title(mode_str):
         """콘솔 타이틀에 현재 모드 표시 (작업표시줄에서 확인 가능)."""
@@ -318,8 +316,6 @@ def main():
 
 
     # ── 포커스 체크 (윈도우 타이틀 방식) ──
-    import ctypes.wintypes
-
     ALLOWED_TITLES = {"HELLDIVERS™ 2"}
 
     def get_foreground_title():
@@ -334,6 +330,29 @@ def main():
         return get_foreground_title() in ALLOWED_TITLES
 
     log_mode(False, "시작")
+
+    # ── 처리 큐 + 처리 스레드 ──
+    key_queue = queue.Queue()
+
+    def process_loop():
+        """처리 스레드: 큐에서 키를 꺼내 한글 조합 + inject_diff 순차 실행."""
+        prev_text = ''
+        while True:
+            cmd = key_queue.get()
+            if cmd == '__clear__':
+                prev_text = ''
+                continue
+            # cmd = 처리할 키 (문자, 'backspace', 'space')
+            state.record(cmd)
+            curr_text = state.current()
+            inject_diff(prev_text, curr_text)
+            prev_text = curr_text
+            if not state.korean_keys:
+                state.fixed = ''
+                prev_text = ''
+
+    process_thread = threading.Thread(target=process_loop, daemon=True)
+    process_thread.start()
 
     # ── 키보드 훅 ──
     def on_key(event):
@@ -351,7 +370,7 @@ def main():
             True  → 키를 OS/앱에 전달 (통과)
             False → 키를 차단 (suppress)
         """
-        nonlocal prev_text, chat_open, chat_mode, ctrl_held, shift_held, alt_held
+        nonlocal chat_open, chat_mode, ctrl_held, shift_held, alt_held
 
         key = event.name
         is_down = event.event_type == 'down'
@@ -389,7 +408,7 @@ def main():
                 # 채팅창 닫힌 상태에서 영문→한글 전환 차단
                 return True
             state.toggle()
-            prev_text = ''
+            key_queue.put('__clear__')
             log_mode(state.mode, "R-Alt")
             if chat_open:
                 chat_mode = state.mode
@@ -408,7 +427,7 @@ def main():
                 log_chat(False)
                 if state.mode:
                     state.clear()
-                    prev_text = ''
+                    key_queue.put('__clear__')
                     state.mode = False
                     log_mode(False, "Enter(송출)")
             else:
@@ -428,7 +447,7 @@ def main():
                 log_chat(False)
             if state.mode:
                 state.clear()
-                prev_text = ''
+                key_queue.put('__clear__')
                 state.mode = False
                 log_mode(False, "Esc")
 
@@ -445,18 +464,12 @@ def main():
         if key == 'backspace':
             if not state.korean_keys and not state.fixed:
                 return True
-            state.record(key)
-            curr_text = state.current()
-            inject_diff(prev_text, curr_text)
-            prev_text = curr_text
+            key_queue.put('backspace')
             return False
 
-        # Space: 조합 확정 + 실제 스페이스 키 전송
-        # keyboard.write(' ')는 게임에서 무시되므로 press_and_release 사용
+        # Space: 조합 확정 + 공백 주입
         if key == 'space':
-            state.clear()
-            prev_text = ''
-            keyboard.press_and_release('space')
+            key_queue.put('space')
             return False
 
         # 문자 키: 한글 조합 처리
@@ -464,23 +477,43 @@ def main():
             key = key.lower()       # CapsLock 무시: 항상 소문자 기준
             if shift_held:
                 key = key.upper()   # Shift만 대문자 기준 (쌍자음 등)
-            state.record(key)
-            curr_text = state.current()
-            inject_diff(prev_text, curr_text)
-            prev_text = curr_text
-            if not state.korean_keys:
-                # 조합 완료 (비한글 문자 등): 상태 리셋
-                state.fixed = ''
-                prev_text = ''
+            key_queue.put(key)
             return False
 
         # 그 외 키 (Tab, F키, 방향키 등): 조합 확정 후 통과
         state.clear()
-        prev_text = ''
+        key_queue.put('__clear__')
         return True
 
+    # ── 마우스 훅 (채팅창 닫힘 감지) ──
+    def on_mouse(event):
+        """마우스 클릭 시 채팅창 닫힘 처리."""
+        nonlocal chat_open
+        if not isinstance(event, mouse.ButtonEvent):
+            return
+        if event.event_type != 'down':
+            return
+        if event.button not in ('left', 'right'):
+            return
+        if not is_allowed_focus():
+            return
+        if not chat_open:
+            return
+
+        chat_open = False
+        log_chat(False)
+        if state.mode:
+            state.clear()
+            key_queue.put('__clear__')
+            state.mode = False
+            log_mode(False, f"마우스({event.button})")
+
     keyboard.hook(on_key, suppress=True)
-    keyboard.wait()
+    mouse.hook(on_mouse)
+    try:
+        keyboard.wait()
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
