@@ -29,7 +29,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
@@ -149,8 +149,8 @@ class State:
 
 
 # ── 주입 (keyboard.write + 딜레이) ───────────────────────────
-WRITE_DELAY = 0.01   # 글자 간 딜레이 (초) — 게임 입력 안정성용
-BS_SETTLE = 0.02     # 백스페이스 후 대기 (초) — 게임이 처리할 시간
+WRITE_DELAY = 0        # 글자 간 딜레이 (초)
+BS_SETTLE = 0.034      # 백스페이스 후 대기 (초) — 30fps 기준 1프레임
 
 
 def inject_diff(prev, curr):
@@ -259,7 +259,7 @@ def main():
         (None,   "",
                  ""),
         (None,   f"   {C_CYAN}게임(HELLDIVERS™ 2) 창이 활성화된 상태에서만 동작합니다{C_RESET}",
-                 f" {C_DIM}* CapsLock은 한글 모드에서 무시됨{C_RESET}"),
+                 ""),
     ]
 
     # id → 커서 기준 위로 몇 줄 (배너 출력 후 자동 계산)
