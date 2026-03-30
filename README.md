@@ -14,6 +14,7 @@ HELLDIVERS™ 2의 채팅창에서 Windows IME가 동작하지 않아 한글 입
 | 단계 | 설명 |
 |------|------|
 | **키 가로채기** | `keyboard.hook(suppress=True)` — 저수준 키보드 훅으로 원본 키 이벤트 차단 |
+| **비동기 처리** | 훅은 키 억제만 결정하고 즉시 반환, 처리 스레드에서 조합 + 주입을 순차 실행 |
 | **한글 조합** | 두벌식 자모 매핑 + `py-hangul-utils`로 실시간 조합 (초성·중성·종성 분리/결합) |
 | **문자 주입** | `keyboard.write()` — `SendInput` + `KEYEVENTF_UNICODE`로 게임에 직접 전달 |
 | **차이 주입** | 이전 텍스트와 비교하여 변경된 부분만 백스페이스 + 재입력 (최소 키 이벤트) |
@@ -104,6 +105,13 @@ pyinstaller hangul-bypass.spec
 - **관리자 권한이 필요할 수 있음** — 동작하지 않으면 관리자 권한으로 실행
 - **HELLDIVERS™ 2 전용** — 채팅 열기/닫기 동작이 HD2 기준으로 설계됨
 
+
+---
+
+## 관련 프로젝트
+
+- [engkor_converter](https://github.com/amature0000/engkor_converter) — 영-한 문자열 변환 프로그램
+- [Virtual-KR-IME](https://github.com/JeongminYoon/Virtual-KR-IME) — Windows용 가상 한글 입력기
 
 ---
 
