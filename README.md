@@ -70,7 +70,6 @@ python hangul_bypass.py --debug
 | `Esc` / `L/R-클릭` | 채팅창 닫기 + 영문 전환 |
 | `Backspace` | 조합 중이면 마지막 자모 삭제, 아니면 원래 동작 |
 | `Space` | 현재 조합 확정 + 공백 입력 |
-| `Ctrl+C` | 프로그램 종료 (터미널) |
 
 - **CapsLock**이 켜져 있어도 쌍자음으로 입력되지 않습니다 (Shift만 쌍자음 인식).
 - **Ctrl/Alt 조합**(Ctrl+C, Alt+Tab 등)은 한글 모드에서도 그대로 통과합니다.
@@ -101,9 +100,9 @@ pyinstaller hangul-bypass.spec
 
 ## 제한 사항
 
-- **Windows 전용** — Win32 API와 `keyboard` 라이브러리 의존
-- **관리자 권한 필요** — 저수준 키보드 훅 사용
-- **HELLDIVERS™ 2 기준 설계** — 다른 게임은 `ALLOWED_TITLES` 수정 필요
+- **Windows 전용** — Win32 API와 `keyboard`, `mouse` 라이브러리 의존
+- **관리자 권한이 필요할 수 있음** — 동작하지 않으면 관리자 권한으로 실행
+- **HELLDIVERS™ 2 전용** — 채팅 열기/닫기 동작이 HD2 기준으로 설계됨
 
 
 ---
