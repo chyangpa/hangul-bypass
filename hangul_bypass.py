@@ -34,7 +34,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
