@@ -155,7 +155,76 @@ class State:
 
 # ── 주입 (keyboard.write + 딜레이) ───────────────────────────
 WRITE_DELAY = 0        # 글자 간 딜레이 (초)
+PASTE_DELAY = 0.0029   # 붙여넣기 글자 간 딜레이 (초) — 30fps 기준 최적값
 BS_SETTLE = 0.034      # 백스페이스 후 대기 (초) — 30fps 기준 1프레임
+
+
+def _send_unicode(text, delay=0):
+    """SendInput + KEYEVENTF_UNICODE로 유니코드 문자열 직접 전송.
+
+    keyboard.write()와 달리 눌린 키를 release/re-press하지 않아
+    훅의 수식키 추적에 간섭하지 않음.
+    """
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_UNICODE = 0x0004
+    KEYEVENTF_KEYUP = 0x0002
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                     ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                     ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                     ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                     ("time", ctypes.c_ulong),
+                     ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+    class INPUT(ctypes.Structure):
+        class _INPUT(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT)]
+        _fields_ = [("type", ctypes.c_ulong), ("ii", _INPUT)]
+
+    for char in text:
+        code = ord(char)
+        inp_down = INPUT(type=INPUT_KEYBOARD)
+        inp_down.ii.ki = KEYBDINPUT(0, code, KEYEVENTF_UNICODE, 0, None)
+        inp_up = INPUT(type=INPUT_KEYBOARD)
+        inp_up.ii.ki = KEYBDINPUT(0, code, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, None)
+        arr = (INPUT * 2)(inp_down, inp_up)
+        ctypes.windll.user32.SendInput(2, arr, ctypes.sizeof(INPUT))
+        if delay:
+            time.sleep(delay)
+
+
+def get_clipboard_text():
+    """Win32 API로 클립보드 유니코드 텍스트 읽기."""
+    CF_UNICODETEXT = 13
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    # 64비트 Windows: 포인터/핸들 타입 명시 (기본 c_int → 잘림/오버플로 방지)
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    if not user32.OpenClipboard(0):
+        log.debug("clipboard: OpenClipboard 실패")
+        return None
+    try:
+        h = user32.GetClipboardData(CF_UNICODETEXT)
+        if not h:
+            log.debug("clipboard: GetClipboardData 실패 (CF_UNICODETEXT 없음)")
+            return None
+        p = kernel32.GlobalLock(h)
+        if not p:
+            log.debug("clipboard: GlobalLock 실패")
+            return None
+        try:
+            return ctypes.wstring_at(p)
+        finally:
+            kernel32.GlobalUnlock(h)
+    finally:
+        user32.CloseClipboard()
 
 
 def inject_diff(prev, curr):
@@ -314,7 +383,6 @@ def main():
         update_row("chat", chat_left(chat_open, is_korean))
         log.debug("채팅 모드 → %s", "한글" if is_korean else "영문")
 
-
     # ── 포커스 체크 (윈도우 타이틀 방식) ──
     ALLOWED_TITLES = {"HELLDIVERS™ 2"}
 
@@ -340,6 +408,13 @@ def main():
         while True:
             cmd = key_queue.get()
             if cmd == '__clear__':
+                prev_text = ''
+                continue
+            if isinstance(cmd, tuple) and cmd[0] == '__paste__':
+                if state.korean_keys or state.fixed:
+                    state.clear()
+                    inject_diff(prev_text, '')
+                _send_unicode(cmd[1], delay=PASTE_DELAY)
                 prev_text = ''
                 continue
             # cmd = 처리할 키 (문자, 'backspace', 'space')
@@ -413,6 +488,18 @@ def main():
             if chat_open:
                 chat_mode = state.mode
                 log_chat_mode(chat_mode)
+            return True
+
+        # Ctrl+V: 채팅창에서 클립보드 붙여넣기
+        if ctrl_held and key == 'v' and chat_open:
+            text = get_clipboard_text()
+            if text:
+                # 줄바꿈 → 공백 (Enter가 채팅 송출을 트리거하므로)
+                text = text.replace('\r\n', ' ').replace('\r', ' ').replace('\n', ' ').strip()
+            if text:
+                log.info("paste: %d chars", len(text))
+                key_queue.put(('__paste__', text))
+                return False
             return True
 
         # Ctrl/Alt 조합은 무조건 통과 (Ctrl+C, Alt+Tab 등)
