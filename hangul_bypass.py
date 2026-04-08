@@ -34,7 +34,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
@@ -323,7 +323,7 @@ def main():
         ("chat", chat_left(False, True),
                  f" {C_YELLOW}Esc, L/R-클릭{C_RESET} {C_DIM}·{C_RESET} 채팅창 닫기"),
         (None,   "",
-                 ""),
+                 f" {C_YELLOW}Ctrl+V{C_RESET} {C_DIM}·{C_RESET} 클립보드 붙여넣기"),
         (None,   "",
                  ""),
         (None,   f"   {C_CYAN}게임(HELLDIVERS™ 2) 창이 활성화된 상태에서만 동작합니다{C_RESET}",
