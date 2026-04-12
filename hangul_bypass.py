@@ -34,7 +34,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
@@ -448,6 +448,8 @@ def main():
         nonlocal chat_open, chat_mode, ctrl_held, shift_held, alt_held
 
         key = event.name
+        if key is None:
+            return True
         is_down = event.event_type == 'down'
 
         log.debug("event: name=%r type=%s  fg=%r", key, event.event_type, get_foreground_title())
