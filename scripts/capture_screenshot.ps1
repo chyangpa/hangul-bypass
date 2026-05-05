@@ -23,7 +23,7 @@ public class Win32 {
 # wt 새 창으로 실행 (사이즈 지정)
 $args = @(
     "-w","new",
-    "--size","130,28",
+    "--size","140,28",
     "cmd","/k",
     $ExePath
 )
