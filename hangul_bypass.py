@@ -34,7 +34,7 @@ if sys.stdout.encoding != 'utf-8':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # ── 설정 ──────────────────────────────────────────────────────
-VERSION = "0.7.2"
+VERSION = "0.7.4"
 TOGGLE_KEY = ["right alt", "hangul"]
 
 # ── 한글 조합 매핑 (두벌식) ───────────────────────────────────
@@ -454,16 +454,41 @@ def main():
 
         log.debug("event: name=%r type=%s  fg=%r", key, event.event_type, get_foreground_title())
 
+        # ── TOGGLE_KEY (R-Alt, 한/영): HD2 포커스 시 항상 suppress ──
+        # OS에 도달하면 Windows IME가 토글되어, 영문 모드에서 후속 키가
+        # IME 합성창에 흡수돼 게임이 키를 못 받음 = "키보드 먹통".
+        # down/up 페어 모두 차단해야 OS IME 상태 안 바뀜.
+        # 다른 앱 포커스에서는 통과시켜 Korean IME 정상 동작 보장.
+        if key in TOGGLE_KEY:
+            if key == 'right alt':
+                alt_held = is_down
+            if not is_allowed_focus():
+                return True
+            if not is_down:
+                return False
+            if not chat_open:
+                if state.mode:
+                    state.clear()
+                    key_queue.put('__clear__')
+                    state.mode = False
+                    log_mode(False, "R-Alt(채팅 닫힘)")
+                return False
+            state.toggle()
+            key_queue.put('__clear__')
+            log_mode(state.mode, "R-Alt")
+            chat_mode = state.mode
+            log_chat_mode(chat_mode)
+            return False
+
         # ── 수식키 추적 (포커스 무관하게 항상 추적) ──
 
         if key in ('ctrl', 'left ctrl', 'right ctrl'):
             ctrl_held = is_down
             return True
 
-        if key in ('alt', 'left alt', 'right alt'):
+        if key in ('alt', 'left alt'):  # right alt는 위 TOGGLE_KEY에서 처리
             alt_held = is_down
-            if key != 'right alt':  # R-Alt는 토글용, 아래에서 별도 처리
-                return True
+            return True
 
         if key in ('shift', 'left shift', 'right shift'):
             shift_held = is_down
@@ -475,21 +500,6 @@ def main():
 
         # key-up은 처리하지 않음
         if not is_down:
-            return True
-
-        # ── 모드 전환 키 ──
-
-        # R-Alt: 한/영 토글 (Ctrl/Alt 조합 체크보다 먼저 처리)
-        if key in TOGGLE_KEY:
-            if not chat_open and not state.mode:
-                # 채팅창 닫힌 상태에서 영문→한글 전환 차단
-                return True
-            state.toggle()
-            key_queue.put('__clear__')
-            log_mode(state.mode, "R-Alt")
-            if chat_open:
-                chat_mode = state.mode
-                log_chat_mode(chat_mode)
             return True
 
         # Ctrl+V: 채팅창에서 클립보드 붙여넣기
